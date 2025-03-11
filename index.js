@@ -63,15 +63,37 @@ try {
         const emailDomains = client["Email Domains"] != "" ? client["Email Domains"].split(",") : [];
         await logger("./logs.txt", `${emailDomains.length} domains found`, null, true);
 
-        if (emailDomains.length === 0) {
-            await logger("./logs.txt", `Skipping client due to no domain found`, null, true);
-            continue;
+        let proxycurlResponse;
+        if (emailDomains.length > 0) {
+            for (let [emailDomainIndex, emailDomain] of emailDomains.entries()) {
+                await logger("./logs.txt", `(${emailDomainIndex + 1}/${emailDomains.length}) Searching based on domain: ${emailDomain}`, null, true);
+
+                try {
+                    proxycurlResponse = await apiCaller({
+                        method: "GET",
+                        baseUrl: `https://nubela.co/proxycurl/api`,
+                        endpoint: "/linkedin/company/resolve",
+                        bearerToken: PROXYCURL_API_KEY,
+                        params: {
+                            "company_domain": emailDomain,
+                            "enrich_profile": "enrich"
+                        }
+                    });
+                    if (!proxycurlResponse.url) {
+                        proxycurlResponse = undefined;
+                        throw Error("Not found");
+                    }
+                    await logger("./logs.txt", `Match found using domain`, null, true);
+                    break;
+                } catch (error) {
+                    await logger("./logs.txt", `Proxycurl returned an error response: ${error}`, null, true);
+                }
+            }
         }
 
-        let proxycurlResponse;
-        for (let [emailDomainIndex, emailDomain] of emailDomains.entries()) {
-            await logger("./logs.txt", `(${emailDomainIndex + 1}/${emailDomains.length}) Searching based on domain: ${emailDomain}`, null, true);
-
+        if (!proxycurlResponse) {
+            await logger("./logs.txt", `Unable to find a successful match using domain, attempting to search using name...`, null, true);
+            
             try {
                 proxycurlResponse = await apiCaller({
                     method: "GET",
@@ -79,57 +101,65 @@ try {
                     endpoint: "/linkedin/company/resolve",
                     bearerToken: PROXYCURL_API_KEY,
                     params: {
-                        "company_domain": emailDomain,
-                        // "company_name": "Microsoft",
+                        "company_name": client.Client,
                         "enrich_profile": "enrich"
                     }
                 });
-                await logger("./logs.txt", `Match found`, null, true);
+                if (!proxycurlResponse.url) {
+                    proxycurlResponse = undefined;
+                    throw Error("Not found");
+                }
+                await logger("./logs.txt", `Match found using name`, null, true);
             } catch (error) {
                 await logger("./logs.txt", `Proxycurl returned an error response: ${error}`, null, true);
             }
         }
 
         if (!proxycurlResponse) {
-            await logger("./logs.txt", `Unable to find a successful match`, null, true);
+            await logger("./logs.txt", `Unable to find a successful match using domain or name`, null, true);
             continue;
         }
 
         // Post to Halo
+        const body = [
+            {
+                "isclientdetails": true,
+                "id": `${client["Client ID"]}`,
+                "customfields": [
+                    ...(proxycurlResponse.profile.company_size[0]
+                        ? [{
+                            "name": "CFLinkedInCompanySizeUpper",
+                            "value": `${proxycurlResponse.profile.company_size[0]}`
+                          }]
+                        : []),
+                    ...(proxycurlResponse.profile.company_size[1]
+                        ? [{
+                            "name": "CFLinkedInCompanySizeUpper",
+                            "value": `${proxycurlResponse.profile.company_size[1]}`
+                          }]
+                        : []),
+                    {
+                        "name": "CFProxycurlPayload",
+                        "value": `${JSON.stringify(proxycurlResponse)}`
+                    },
+                    {
+                        "name": "CFProxycurlLastSynced",
+                        "value": new Date().toISOString()
+                    }
+                ]
+            }
+        ];
         try {
             await apiCaller({
                 method: "POST",
                 baseUrl: `https://halo.haloservicedesk.com/api`,
                 endpoint: "/client",
                 bearerToken: haloAccessToken,
-                body: [
-                    {
-                        "isclientdetails": true,
-                        "id": `${client["Client ID"]}`,
-                        "customfields": [
-                            {
-                                "name": "CFLinkedInCompanySizeLower",
-                                "value": `${proxycurlResponse.profile.company_size[0]}`
-                            },
-                            {
-                                "name": "CFLinkedInCompanySizeUpper",
-                                "value": `${proxycurlResponse.profile.company_size[1]}`
-                            },
-                            {
-                                "name": "CFProxycurlPayload",
-                                "value": JSON.stringify(proxycurlResponse)
-                            },
-                            {
-                                "name": "CFProxycurlLastSynced",
-                                "value": new Date().toISOString()
-                            }
-                        ]
-                    }
-                ]
+                body: body
             });
             await logger("./logs.txt", `Posted to Halo`, null, true);
         } catch (error) {
-            await logger("./logs.txt", `Failed to post to Halo: ${error}`, null, true);
+            await logger("./logs.txt", `Failed to post to Halo: ${error} Body: ${JSON.stringify(body)}`, null, true);
             continue;
         }
     }
