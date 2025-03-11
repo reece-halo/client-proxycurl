@@ -4,7 +4,8 @@
     "type": "module",
     "main": "index.js",
     "scripts": {
-        "run": "node index.js"
+        "run": "node index.js",
+        "sync": "node sync.js"
     },
     "author": "",
     "license": "ISC",
