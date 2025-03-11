@@ -117,7 +117,12 @@ try {
 
         if (!proxycurlResponse) {
             await logger("./logs.txt", `Unable to find a successful match using domain or name`, null, true);
-            continue;
+            proxycurlResponse = {
+                error: "Unable to find a successful match using domain or name",
+                profile: {
+                    company_size: []
+                }
+            }
         }
 
         // Post to Halo
